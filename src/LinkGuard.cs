@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Management;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Web;
 using System.Windows.Forms;
@@ -9,6 +10,10 @@ using Microsoft.Win32;
 
 static class LinkGuard
 {
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int pid);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    const int ASFW_ANY = -1;
+
     [STAThread]
     static void Main(string[] args)
     {
@@ -19,7 +24,7 @@ static class LinkGuard
 
         Application.EnableVisualStyles();
         string target = Unwrap(url);
-        if (Confirm(url, target) == DialogResult.OK) OpenInBrowser(url);
+        Confirm(url, target);
     }
 
     static bool FromOutlook()
@@ -104,7 +109,25 @@ static class LinkGuard
         };
         if (warn.Length > 0) hostLbl.ForeColor = Color.Firebrick;
 
-        var ok = new Button { Text = "Aç", DialogResult = DialogResult.OK, Location = new Point(444, 286), Size = new Size(85, 30) };
+        var ok = new Button { Text = "Aç", Location = new Point(444, 286), Size = new Size(85, 30) };
+        // Tarayıcıyı pencere hâlâ öndeyken başlat; pencereyi tarayıcı öne geçene kadar
+        // kapatma, yoksa Windows odağı Outlook'a geri verir ve tarayıcı arkada kalır.
+        ok.Click += (s, e) =>
+        {
+            ok.Enabled = false;
+            OpenInBrowser(original);
+            DateTime until = DateTime.Now.AddSeconds(3);
+            var t = new Timer { Interval = 100 };
+            t.Tick += (s2, e2) =>
+            {
+                if (GetForegroundWindow() != f.Handle || DateTime.Now > until)
+                {
+                    t.Stop();
+                    f.DialogResult = DialogResult.OK;
+                }
+            };
+            t.Start();
+        };
         var cancel = new Button { Text = "İptal", DialogResult = DialogResult.Cancel, Location = new Point(539, 286), Size = new Size(85, 30) };
         var copy = new Button { Text = "Adresi kopyala", Location = new Point(16, 286), Size = new Size(120, 30) };
         copy.Click += (s, e) => Clipboard.SetText(target);
@@ -118,6 +141,8 @@ static class LinkGuard
 
     static void OpenInBrowser(string url)
     {
+        // Chrome zaten açıksa yeni süreç URL'yi mevcut sürece devreder; ona da öne gelme izni ver
+        AllowSetForegroundWindow(ASFW_ANY);
         string cmd = null;
         using (var k = Registry.ClassesRoot.OpenSubKey(@"ChromeHTML\shell\open\command"))
             if (k != null) cmd = k.GetValue("") as string;
